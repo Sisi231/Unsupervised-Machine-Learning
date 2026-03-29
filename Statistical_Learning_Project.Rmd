@@ -1,0 +1,879 @@
+---
+title: "Statistical Learning Project"
+subtitle: "Homework 1: Unsupervised Learning"
+output:
+  html_document: 
+    theme: cerulean
+    highlight: tango
+    number_sections: no
+    toc: no
+    toc_depth: 1
+  pdf_document:
+    theme: cerulean
+    highlight: tango
+    number_sections: yes
+    toc: yes
+    toc_depth: 1
+date: "2024-11-08"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(repos = c(CRAN = "https://cloud.r-project.org"))
+```
+
+# Libraries 
+```{r}
+library(dplyr)
+library(GGally)
+library(ggplot2)
+library(factoextra)
+library(cluster)
+library(mclust)
+library(kernlab)
+library(MASS)
+```
+
+# Dataset and variable selection
+We have decided to use the R-library NHANES(National Health and Nutrition Examination Survey) dataset for our project. It is a dataset that shows the health data of survey takers in the year intervals 2009-2010 and 2011-2012. This dataset has 10000 observations and 76 variables. 
+```{r}
+install.packages("NHANES")
+library(NHANES)
+```
+If the previous code doesn't work due to different version of RStudio, the 
+following code should work. Please set your working directory to be the folder 
+with all the documents of our homework. 
+```{r}
+NHANES <- read.csv("NHANES_data.csv")
+```
+
+```{r}
+data("NHANES")
+head(NHANES)
+```
+
+Looking at the first three observations' ID, we see that there are some repetitions. 
+Our first step will be to remove those repetitions. Then looking at the summary of 
+the data, we can see that there are columns that have a lot of NA values and variables 
+that are factors. For our purposes of using this data for unsupervised learning,
+we can remove those variables. 
+```{r}
+# choose only the unique observations 
+unique_data <- NHANES %>% distinct(ID, .keep_all = TRUE)
+summary(unique_data)
+# Choose which variables will be most useful
+my_data = unique_data %>% dplyr::select("Gender", "Age", "HHIncomeMid", "Weight", "Height", "BMI",
+                                 "Pulse", "BPSysAve", "BPDiaAve", "TotChol", 
+                                 "UrineVol1", "UrineFlow1", "DaysPhysHlthBad", 
+                                 "DaysMentHlthBad", "SleepHrsNight", "PhysActiveDays",
+                                 "SexAge")
+```
+# Dealing with NA values
+```{r}
+# Find which rows have the most NA values
+na_count <- rowSums(is.na(my_data))
+unique_na_counts <- unique(na_count)
+unique_na_counts # there are rows with missing from 0 - 14
+# As some rows have a lot of missing data, it would be best if we remove them. 
+# Hence any rows that have more than 6 missing values will be removed
+new_data <- my_data[!(na_count %in% c(6, 7, 8, 9, 10, 11, 12, 13, 14)), ]
+# We are left with 5559 observations, which is good.
+summary(new_data) 
+# With the summary we can see that every column has a lot of missing values, 
+# but PhysActiveDays and SexAge have the most(>2100), so it would be better 
+# to remove those columns.
+new_data = new_data %>% dplyr::select(-PhysActiveDays, -SexAge)
+```
+For the rest of the variables we will replace the NA values with the average of each variable.
+```{r}
+# As BMI is calculated based on weight and height, we can replace the the NA 
+# values in that column by calculating it. 
+new_data$Weight[is.na(new_data$Weight)] <- mean(new_data$Weight, na.rm = TRUE)
+new_data$Height[is.na(new_data$Height)] <- mean(new_data$Height, na.rm = TRUE)
+new_data$BMI[is.na(new_data$BMI)] <- new_data$Weight[is.na(new_data$BMI)] / (new_data$Height[is.na(new_data$BMI)]^2)
+new_data <- new_data %>%
+  mutate(across(where(is.numeric), ~ ifelse(is.na(.), mean(., na.rm = TRUE), .)))
+```
+As that function will make all of the integer values into numerical,
+we will transform them back to integers.
+```{r}
+new_data$Pulse = as.integer(new_data$Pulse)
+new_data$BPSysAve = as.integer(new_data$BPSysAve)
+new_data$BPDiaAve = as.integer(new_data$BPDiaAve)
+new_data$UrineVol1 = as.integer(new_data$UrineVol1)
+new_data$DaysPhysHlthBad = as.integer(new_data$DaysPhysHlthBad)
+new_data$DaysMentHlthBad = as.integer(new_data$DaysMentHlthBad)
+new_data$SleepHrsNight = as.integer(new_data$SleepHrsNight)
+sum(rowSums(is.na(new_data)))  # check if there are any NA values now
+```
+# Feature engineering. 
+Creating new variables that may be of use for us.
+```{r}
+# Any abnormal BPRatio may indicate cardiac issues 
+# As there are some observations with BPDiaAve = 0, which would not work for us,
+# we have decided to remove those records. 
+new_data <- new_data %>% filter(BPDiaAve != 0)
+new_data$BPRatio <- new_data$BPSysAve / new_data$BPDiaAve
+
+# Total Bad Health Days will show us how many days of the year the person didn't feel good.
+new_data$TotalBadHealthDays <- new_data$DaysPhysHlthBad + new_data$DaysMentHlthBad
+
+# SleepAdjusted shows if based on age, a person is sleeping enough. We will remove
+# SleepHrsNight and replace it with this variable as it would give a more accurate 
+# interpretation if the person sleeps enough for their age.
+new_data$SleepAdjusted <- ifelse(new_data$Age < 18, new_data$SleepHrsNight / 9, 
+                           ifelse(new_data$Age < 65, new_data$SleepHrsNight / 7, new_data$SleepHrsNight / 7))
+new_data = new_data %>% dplyr::select(-SleepHrsNight)
+
+# Cholesterol BMI Ration shows the relation between the cholesterol levels and body mass.
+new_data$CholesterolBMIRatio <- new_data$TotChol/new_data$BMI
+
+# PulseAgeRatio can indicate health problems if the ratio is abnormal for the age 
+new_data$PulseAgeRatio <- new_data$Pulse/new_data$Age
+```
+
+# Normalization of variables:
+```{r}
+normalize_z <- function(x) {(x - mean(x, na.rm = TRUE)) / sd(x, na.rm = TRUE)}
+normalized_new_data <- new_data %>%
+  mutate(across(where(is.numeric), normalize_z))
+numerical_data = normalized_new_data %>% dplyr::select(where(is.numeric))
+summary(numerical_data)
+```
+
+# Dealing with outliers:
+```{r}
+boxplot(numerical_data[, sapply(numerical_data, is.numeric)],las = 2, cex.axis = 0.5)
+```
+```{r}
+# 1) Identify them
+identify_outliers <- function(x) {
+  Q1 <- quantile(x, 0.25, na.rm = TRUE)
+  Q3 <- quantile(x, 0.75, na.rm = TRUE)
+  IQR_value <- Q3 - Q1
+  outliers <- x < (Q1 - 1.5 * IQR_value) | x > (Q3 + 1.5 * IQR_value)
+  return(outliers)
+}
+
+# Apply outlier function to each numeric column
+outlier_matrix <- sapply(numerical_data[, sapply(numerical_data, is.numeric)], identify_outliers)
+
+# Check which columns and rows have outliers
+outliers_by_variable <- colSums(outlier_matrix) # Number of outliers per variable
+outliers_by_variable
+```
+
+From that we can see that we have many outliers in the columns DaysPhysHlthBad,
+DaysMentHlthBad, and TotalBadHealthDays. From this we can judge that they have high 
+uniqueness relative to the rest of the variables, which can mess with our 
+models, so it would be best to remove these columns and do the unsupervised
+learning on the rest of the variables. 
+```{r}
+numerical_data = numerical_data %>% dplyr::select(-DaysPhysHlthBad, -DaysMentHlthBad, 
+                                           -TotalBadHealthDays)
+```
+
+Before removing the outliers, we can check the correlation matrix to see if we 
+can remove some columns that don't show any strong relationships or some that 
+have only one strong relation.
+```{r}
+ggcorr(numerical_data)
+```
+
+From this we can see that CholestrolBMIRatio only has weak relations, 
+UrineVol1 and UrineFlow1 are strongly corelated, so we can remove one of them
+(remove UrineFlow1 as it has more outliers). We decided to keep both BMI and
+Weight for now. 
+```{r}
+numerical_data = numerical_data %>% dplyr::select(-CholesterolBMIRatio, -UrineFlow1)
+```
+
+2) Remove rows with outliers
+```{r}
+# new outlier matrix
+outlier_matrix <- sapply(numerical_data[, sapply(numerical_data, is.numeric)], identify_outliers)
+cleaned_data <- numerical_data[!rowSums(outlier_matrix), ]
+```
+Checking the standard deviation
+```{r}
+sd_values = sapply(cleaned_data[, sapply(cleaned_data, is.numeric)], sd, na.rm = TRUE)
+sd_df <- data.frame(Variable = names(sd_values), SD = sd_values)
+ggplot(sd_df, aes(x = reorder(Variable, -SD), y = SD)) +
+  geom_bar(stat = "identity", fill = "pink") +
+  coord_flip() +  # Flip the chart for easier readability
+  theme_minimal() +
+  labs(title = "Standard Deviation of Each Variable", x = "Variable", y = "Standard Deviation")
+```
+
+From this we can see that BPRatio has a relatively smaller standard deviation,
+which can mean that it does not contribute much to the variability of the data.
+Hence, we can remove it. 
+```{r}
+numerical_data = numerical_data %>% dplyr::select(-BPRatio)
+outlier_matrix <- sapply(numerical_data[, sapply(numerical_data, is.numeric)], identify_outliers)
+final_cleaned_data <- numerical_data[!rowSums(outlier_matrix), ]
+boxplot(final_cleaned_data[, sapply(final_cleaned_data, is.numeric)],las = 2, cex.axis = 0.5)
+```
+# Visualization
+
+1. Create histograms to show the distribution of each variable.
+
+This allows us to see which variables are normally distributed, which are skewed, 
+which are multimodal(have peaks in the histogram), or which have low variance.
+```{r}
+numeric_vars <- c("Age", "HHIncomeMid", "Weight", "Height", "BMI", "Pulse", "BPSysAve", 
+                  "BPDiaAve", "TotChol", "UrineVol1", "SleepAdjusted", "PulseAgeRatio")
+for (var in numeric_vars) {
+  p <- ggplot(final_cleaned_data, aes_string(var)) +
+    geom_histogram(bins = 30, fill = "pink", color = "red") +
+    theme_minimal() +
+    ggtitle(paste("Distribution of", var)) +
+    xlab(var) + ylab("Frequency") +
+    theme(plot.title = element_text(hjust = 0.5))
+  
+  print(p)
+}
+```
+
+If we were to use UrineVol1 or PulseAgeRatio for clustering, we will need to 
+transform them as they are skewed. SleepAdjusted has some peaks, which suggest 
+that it already has some natural 
+clusters. 
+
+# Deal with skewness. 
+
+Only UrineVol1 and PulseAgeRatio really exhibits heavy skewness. 
+```{r}
+# for UrineVol1
+offset <- abs(min(final_cleaned_data$UrineVol1)) + 1  
+boxcox_result <- boxcox((final_cleaned_data$UrineVol1 + offset) ~ 1)
+lambda <- boxcox_result$x[which.max(boxcox_result$y)]
+final_cleaned_data$UrineVol1 <- ((final_cleaned_data$UrineVol1 + offset)^lambda - 1) / lambda
+
+p <- ggplot(final_cleaned_data, aes_string("UrineVol1")) +
+    geom_histogram(bins = 30, fill = "pink", color = "red") +
+    theme_minimal() +
+    ggtitle(paste("Distribution of", "UrineVol1")) +
+    xlab("UrineVol1") + ylab("Frequency") +
+    theme(plot.title = element_text(hjust = 0.5))
+  
+print(p)
+
+#for PulseAgeRatio
+offset <- abs(min(final_cleaned_data$PulseAgeRatio)) + 1  
+boxcox_result <- boxcox((final_cleaned_data$PulseAgeRatio + offset) ~ 1)
+lambda <- boxcox_result$x[which.max(boxcox_result$y)]
+final_cleaned_data$PulseAgeRatio <- ((final_cleaned_data$PulseAgeRatio + offset)^lambda - 1) / lambda
+
+p <- ggplot(final_cleaned_data, aes_string("PulseAgeRatio")) +
+    geom_histogram(bins = 30, fill = "pink", color = "red") +
+    theme_minimal() +
+    ggtitle(paste("Distribution of", "PulseAgeRatio")) +
+    xlab("PulseAgeRatio") + ylab("Frequency") +
+    theme(plot.title = element_text(hjust = 0.5))
+  
+print(p)
+```
+
+# Correlation
+
+Correlation of the numerical data we have decided to keep: 
+```{r}
+ggcorr(final_cleaned_data)
+```
+
+From this graph we can see that there aren't a lot of variables that have a high 
+correlation between each other. Weight and Height have a strong positive relation 
+as well as BPSysAve and BPDiaAve. Weight and BMI have a moderately strong positive 
+relation. Variables like UrineVol1 and SleepAdjusted very weak relations with the 
+rest. Also, PulseAgeRation shows negative relations with some of the variables.
+
+
+# PCA
+```{r}
+pca = prcomp(final_cleaned_data, scale=T)
+summary(pca) 
+```
+
+We can observe that with 7 variables we are able to explain 84.1% of the data.
+
+```{r}
+screeplot(pca,main="Screeplot",col="pink",type="barplot",pch=19) #Variable importance
+
+```
+
+A nicer view than screeplot is Elbow Method (factoextra)
+
+```{r}
+fviz_screeplot(pca, addlabels = TRUE) 
+```
+
+We can reaffirm with this graph that PCA can be developed correctly with 7 variables 
+
+
+Let us go component by component
+
+First component: 
+```{r}
+barplot(pca$rotation[,1], las=2, col="pink")
+# This barplot shows all the values in the first column (var 1) of the vector matrix
+
+sum(pca$rotation[,1]^2) #This sum should always be equal to 1
+
+fviz_contrib(pca, choice = "var", axes = 1)
+```
+
+We can observe that the most relevant variables for the first component are:
+PulseAgeRatio, Age, BPSysAve, Weight and BMI 
+
+The first component appears to represent a general health index, particularly 
+cardiovascular health and factors related to age and body weight.
+
+
+Top 10 people in general health index:
+
+```{r}
+# use the data before normalization to get the real values
+normal_cleaned_data = new_data %>% dplyr::select(-DaysPhysHlthBad, -DaysMentHlthBad, 
+                                      -TotalBadHealthDays, -CholesterolBMIRatio,
+                                      -UrineFlow1, -BPRatio)
+normal_cleaned_data <- normal_cleaned_data[!rowSums(outlier_matrix), ]
+
+# Get the indices of the top 10 observations along the first principal component
+top_indices1 <- order(pca$x[,1], decreasing = TRUE)[1:10]
+
+# Use these indices to subset the original dataset and view the variable information
+top_observations1 <- normal_cleaned_data[top_indices1, ]
+
+# Display the top observations
+print(top_observations1)
+```
+
+Second component:
+
+```{r}
+barplot(pca$rotation[,2], las=2, col="pink")
+barplot(abs(pca$rotation[,2]), las=2, col="pink")
+
+fviz_contrib(pca, choice = "var", axes = 2)
+```
+
+We can observe that the most relevant variables for the second component are:
+Weight, Height, BMI, Age and PulseAgeRatio
+
+The second component seems to capture a body composition index, focusing on 
+characteristics that define physical development, body size, and possibly the 
+influence of age on these metrics.
+
+
+Third component:
+```{r}
+barplot(pca$rotation[,3], las=2, col="pink")
+barplot(abs(pca$rotation[,3]), las=2, col="pink")
+
+fviz_contrib(pca, choice = "var", axes = 3)
+```
+
+We can observe that the most relevant variables for the third component are:
+Pulse, HHIncomeMide, Height, BMI and UrineVol1
+
+The third component seems to represent a socioeconomic and physiological health index.
+
+
+Top 10 people in socioeconomic and physiological health index:
+
+```{r}
+# Get the indices of the top 10 observations along the first principal component
+top_indices2 <- order(pca$x[,2], decreasing = TRUE)[1:10]
+
+# Use these indices to subset the original dataset and view the variable information
+top_observations2 <- normal_cleaned_data[top_indices2, ]
+
+# Display the top observations
+print(top_observations2)
+```
+
+
+
+Fourth component:
+```{r}
+barplot(pca$rotation[,4], las=2, col="pink")
+barplot(abs(pca$rotation[,4]), las=2, col="pink")
+
+fviz_contrib(pca, choice = "var", axes = 4)
+```
+
+We can observe that the most relevant variables for the fourth component are:
+BPDiaAVe, Pulse, TotChol and BMI
+
+The fourth component appears to represent a cardiovascular and metabolic health risk index.
+
+
+Fifth component:
+
+```{r}
+barplot(pca$rotation[,5], las=2, col="pink")
+barplot(abs(pca$rotation[,5]), las=2, col="pink")
+
+fviz_contrib(pca, choice = "var", axes = 5)
+```
+
+We can observe that the most relevant variables for the fifth component are:
+SleepAdjusted, HHIncomeMid and BPSysAve 
+
+The fifth component seems to represent a lifestyle and socioeconomic health index.
+
+
+
+Sixth component:
+
+```{r}
+barplot(pca$rotation[,6], las=2, col="pink")
+barplot(abs(pca$rotation[,6]), las=2, col="pink")
+
+fviz_contrib(pca, choice = "var", axes = 6)
+```
+
+We can observe that the most relevant variables for the sixth component are:
+UrineVol1, SleepAdjusted and HHIncomeMid  
+
+PC6 may represent a component associated with lifestyle and health factors 
+influenced by socioeconomic status, sleep patterns, and physical health indicators.
+
+
+
+Seventh component:
+
+```{r}
+barplot(pca$rotation[,7], las=2, col="pink")
+barplot(abs(pca$rotation[,7]), las=2, col="pink")
+
+fviz_contrib(pca, choice = "var", axes = 7)
+```
+
+We can observe that the most relevant variables for the seventh component are:
+TotChol, UrineVol1, Height, BPSysAve and SleepAdjusted   
+
+PC7 might capture aspects of cardiovascular and metabolic health, influenced by 
+both physiological markers (like cholesterol and blood pressure) and lifestyle 
+elements (like sleep). This component could help differentiate individuals based 
+on combined cardiovascular risk factors and body-related attributes.
+
+
+
+# Factor analysis
+
+The more factors that we have the better the variance explained will be, but this
+can lead to overfitting. Hence, we need to find the balance between the two. 
+```{r}
+# Factor analysis with all numeric data(should limit them)
+fa_result <- factanal(final_cleaned_data, factors = 4, rotation="varimax", scores="regression", lower = 0.01)
+fa_result
+```
+For using all the variables available, we can see that the best solution will be
+using four factors as we will get a relatively good variance explained and not be 
+in great risk of overfitting. However, as we can see by the chi square statistics, 
+this model does not have the best fit. Changing the rotation or the scores here 
+doesn't really affect the model. We can now try and remove some of the variables 
+that are not well explained by the model. To do that we need to check the uniqueness
+of this factor analysis.
+```{r}
+fa_result$uniquenesses
+```
+Judging by the uniqueness of the variables, we can see that HHIncomeMid, TotChol, 
+UrineVol1 and SleepAdjusted all have above 0.91 uniqueness, which means that more
+91% of the variance in these variable cannot be explained by the model. As we 
+cannot find better models by changing the factors, rotation or scores, we can 
+remove those variables. 
+```{r}
+final_cleaned_data1 = final_cleaned_data %>% dplyr::select(-HHIncomeMid, -TotChol,
+                                                    -UrineVol1, -SleepAdjusted) 
+fa_result_1_f4 <- factanal(final_cleaned_data1, factors = 4, rotation="promax", scores="regression",
+                        lower = 0.01)
+fa_result_1_f4
+```
+```{r}
+fa_result_1_f3 <- factanal(final_cleaned_data1, factors = 3, rotation="promax", scores="regression",
+                        lower = 0.01)
+fa_result_1_f3
+```
+For this variables, the best model would be with four factors as well as it explains 
+a lot of the data(78.6%) and the risk of overfitting is not very high as its complexity
+is not very high. Models will less factors will be less prone to overfitting, but 
+their complexity will also decline a lot. 
+The fit is still bad so we can try to remove other variables and see if we can find 
+a better model. 
+Based on uniqueness we can try to remove Pulse as well.
+```{r}
+final_cleaned_data2 = final_cleaned_data1 %>% dplyr::select(-Pulse)
+fa_result_2_f2 <- factanal(final_cleaned_data2, factors = 2, rotation="varimax", scores="Bartlett", lower = 0.01)
+fa_result_2_f2
+```
+```{r}
+fa_result_2_f3 <- factanal(final_cleaned_data2, factors = 3, rotation="varimax", scores="Bartlett", lower = 0.01)
+fa_result_2_f3
+```
+The model with 2 factors will explain less than 50% and based on the uniqueness, 
+we can see that age, BPSysAve and BPDiaAve are not explained almost at all.
+For these variables the best model is with 3 factors as it explains a lot of the
+variance(73.8%) and it has only three factors, which means that the risk of 
+overfitting is not very high. 
+This is our best model for this data as the chi square statistics is very high. 
+Based on uniqueness we can try to remove BPDiaAve as well.
+```{r}
+final_cleaned_data3 = final_cleaned_data2 %>% dplyr::select(-BPDiaAve)
+fa_result_3 <- factanal(final_cleaned_data3, factors = 3, rotation="varimax", scores="Bartlett", lower = 0.01)
+fa_result_3
+```
+The best model here will be again using 3 factors as it will explain 85.1% of the 
+data, and we finally have a model that has a good fit. Using two factors will not 
+capture enough of the underlining patterns and be a worse model. 
+We can try removing BPSysAve instead of BPDiaAve now. 
+```{r}
+final_cleaned_data4 = final_cleaned_data1 %>% dplyr::select(-Pulse, -BPSysAve)
+fa_result_4 <- factanal(final_cleaned_data4, factors = 3, rotation="varimax", scores="Bartlett", lower = 0.01)
+fa_result_4
+```
+Here we get a little worse fit than the previous one judjing by the cumulative 
+variance and fit. Using two factors will not capture enough of the underlining 
+patterns(variance 52%) and be a worse model. 
+Lastly, we check without Pulse and PulseAgeRatio:
+```{r}
+final_cleaned_data5 = final_cleaned_data1 %>% dplyr::select(-Pulse, -PulseAgeRatio)
+fa_result_5 <- factanal(final_cleaned_data5, factors = 3, rotation="varimax", scores="Bartlett", lower = 0.01)
+fa_result_5
+```
+This model is fitting okay, but it has two variables with high uniqueness.
+
+# Choosing the best model and explaining its loadings:
+
+Best model overall would be fa_result_3 as it explains the most variance 85.1% 
+and has the lowest uniqueness, which means that it captures the underlining patterns
+the best. However, it possesses the risk of overfitting. 
+
+The best model for predicting new data would be model fa_result_2_f3 as it is a 
+good balance between variance (73.8%), fit, and complexity. The risk of overfitting
+is less than with fa_result_3, but it still explains more than fa_result and 
+fa_result_1_f4. 
+
+For fa_result_3(best overall model) we have the following uniqueness and loadings:
+```{r}
+fa_result_3$uniquenesses
+```
+The model explains the variance in the variables Age, Weight, Height, BMI, and 
+PulseAgeRatio very well. BPSysAve is not well explained judging by the high value
+of uniqueness. 
+
+The loadings of this model are ...
+```{r}
+fa_result_3$loadings
+```
+Factor 1 - explains 35.6% variance
+- Age has a high loading(0.990) => F1 is strongly associated with age.
+- BPSysAve has a moderate loading (0.454) => BPSysAve has some association with F1
+- PulseAgeRatio has a strong negative loading (-0.950) => as F1 increases, 
+PulseAgeRatio decreases
+
+Interpretation of F1: Factor 1 captures the variables, which are related to age 
+and health indicators that are affected by age, like BPSysAve and PulseAgeRatio. 
+This factor could represent the health of a person related to their age.
+
+Factor 2 - explains 30.1% variance
+- Weight has a high loading (0.901) => F2 is strongly associated with weight.
+- BMI has a high loading (0.977), F2 is also strongly associated with body 
+composition and mass.
+
+Interpretation of F2: Factor 2 appears to represent the body mass or body 
+composition of a person based on the high loadings of the Weight and BMI variables.
+
+Factor 3 - explains 19.4% variance
+- Height has a high loading (0.991) => F3 is strongly associated with height.
+- Weight has a moderate loading (0.405) => Weight has some association with F3
+
+Interpretation of F3: Factor 3 is probably a "Height" factor that captures the 
+variance in height with minor contribution of weight.
+
+
+For fa_result_2_f3(best for predicting new data) we have the following uniqueness
+and loadings
+```{r}
+fa_result_2_f3$uniquenesses
+```
+The model explains the variance in the variables Age, Weight, Height, BMI, and 
+PulseAgeRatio very well. BPSysAve and BPDiaAve are not well explained judging by
+the high value of uniqueness. 
+```{r}
+fa_result_2_f3$loadings
+```
+Both model appear to have similar factors 
+- Factor 1 is about the health related to the age. Represents 30.5% variance.
+- Factor 2 represent the body mass or body composition of a person. 
+  Represents 26.4% variance
+- Factor 3 is about the height of the person with a small contribution of the 
+  weight. Represents 16.9% variance.
+  
+
+# Clustering 
+
+Explore in what groups can people be divided based on their health metrics to 
+judge their health risk.
+```{r}
+clustering_data_health_risk = final_cleaned_data %>% dplyr::select("BMI","BPSysAve",
+                                                                  "BPDiaAve", "TotChol",
+                                                                  "Pulse")
+ggcorr(clustering_data_health_risk)
+```
+
+
+```{r}
+heatmap(cor(clustering_data_health_risk),symm=T) 
+```
+# K means
+```{r}
+k = 4
+set.seed(1)
+fit <- kmeans(clustering_data_health_risk, k, nstart = 25, iter.max = 100)
+groups = fit$cluster
+barplot(table(groups), col="pink")
+```
+
+```{r}
+fviz_cluster(fit, data = clustering_data_health_risk, geom = c("point"),ellipse.type = 'norm', pointsize=1)+
+  theme_minimal()+scale_fill_brewer(palette="Paired")
+```
+
+Based on the kmeans clustering plot we can see that there is quite a lot of 
+overlapping between the different clusters. We can now check the silhouette width to 
+further determine the goodness of the clustering algorithm. 
+```{r}
+d <- dist(clustering_data_health_risk, method="euclidean")  
+sil = silhouette(groups, d)
+plot(sil, col=1:5, main="", border=NA)
+summary(sil)
+```
+
+Values are closer to zero which indicates that the clusters may overlap. The 
+negative minimum silhouette width also shows that there are some points that 
+have been miscalculated. 
+
+We will now try to find what would be the ideal number of clusters using different
+approaches. 
+```{r}
+fviz_nbclust(clustering_data_health_risk, kmeans, method = 'silhouette', k.max = 20, nstart = 25, iter.max = 100)
+```
+
+Here we can see that the optimal number of clusters will be 2. 
+```{r}
+fviz_nbclust(clustering_data_health_risk, kmeans, method = 'wss', k.max = 20, 
+             nstart = 25, iter.max = 100)
+```
+
+Judging by the Elbow Plot, we can assume that 4 or 5 cluster will be enough. 
+```{r}
+fviz_nbclust(clustering_data_health_risk, kmeans, method = 'gap_stat', k.max = 6, nstart = 15, nboot = 50, iter.max = 50)
+# Please ignore any warnings shown. It takes a lot of time to be run. 
+```
+
+Based on the Gap Statistic Plot, 2 clusters would be the optimal number for our dataset. 
+
+The three graphs give us slightly different answers so we can try and do clustering 
+with 2 centers and with 3 centers and after that decide which is better.
+```{r}
+k = 3
+fit_3 <- kmeans(clustering_data_health_risk, k, nstart = 25, iter.max = 100)
+groups_3 = fit_3$cluster
+fviz_cluster(fit_3, data = clustering_data_health_risk, geom = c("point"),ellipse.type = 'norm', pointsize=1)+
+  theme_minimal()+scale_fill_brewer(palette="Paired")
+```
+```{r}
+centers_3=fit_3$centers
+for(i in 1:3){
+  b = barplot(centers_3[i,], las=2, col="pink")
+}
+```
+```{r}
+print(fit_3$size)
+print(fit_3$centers)  
+```
+
+Based on the centers we can interpret what each cluster will represent.
+Cluster 1 - 1256 individuals
+- BMI: 0.388 — higher-than-average BMI => could mean higher body weight
+- BPSysAve: 0.103 — close to the average
+- BPDiaAve: 0.438 — higher than average, but not by a lot 
+- TotChol: 0.189 — slightly above average; could increase cardiovascular risk
+- Pulse: 0.793 — far above average; the group might be under more physical or 
+  metabolic stress, or may worse cardiovascular fitness
+
+Interpretation of C1: This cluster show a group that has higher BMI and pulse rate 
+and close to average blood pressure and cholesterol levels. These individuals 
+could have an average rick of cardiovascular issues. 
+
+Cluster 2 - 1718 people:
+- BMI: -0.376 — people with lower-than-average BMI
+- BPSysAve: -0.584 — lower than average(but not severly so), which 
+  might mean that this group has healthier blood pressure levels
+- BPDiaAve: -0.487 — lower than average
+- TotChol: -0.569 — lower cholesterol levels, which is healthier
+- Pulse: -0.289 — The pulse rate is also slightly lower 
+  than average, which along with lower BMI, TotChol and blood pressure could mean
+  better cardiovascular fitness
+
+Interpretation of C2: This cluster shows healthier individuals with below average
+BMI, blood pressure, cholesterol and pulse. This could indicate that they have a
+lower risk of cardiovascular issues.
+
+Cluster 3 - 1398 individuals
+- BMI: 0.099 — close to the average, normal body weight
+- BPSysAve: 0.479 — higher-than-average, could increase cardiovascular risk
+- BPDiaAve: 0.422 — higher-than-average
+- TotChol: 0.489 — higher levels, could increase cardiovascular risk
+- Pulse: -0.751 — lower than average; could mean better cardiovascular fitness or 
+  it could mean that the body has a compensatory response to manage higher blood pressure
+  
+Interpretation of C3: This cluster shows individuals with normal BMI, but higher 
+blood pressure and cholesterol levels. They might have a higher risk for 
+cardiovascular conditions and could benefit from changing their diet and contacting
+a doctor to find a way to regulate their blood pressure.
+
+```{r}
+d <- dist(clustering_data_health_risk, method="euclidean")  
+sil = silhouette(groups_3, d)
+plot(sil, col=1:5, main="", border=NA)
+summary(sil)
+```
+
+Values are close to zero which indicates that the clusters may overlap. The 
+negative minimum silhouette width also shows that there are some points that 
+have been miscalculated. 
+```{r}
+k = 2
+fit_2 <- kmeans(clustering_data_health_risk, k, nstart = 25, iter.max = 100)
+groups_2 = fit_2$cluster
+fviz_cluster(fit_2, data = clustering_data_health_risk, geom = c("point"),ellipse.type = 'norm', pointsize=1)+
+  theme_minimal()+scale_fill_brewer(palette="Paired")
+```
+```{r}
+print(fit_2$size)
+print(fit_2$centers)
+```
+
+Based on the centers we can interpret what each cluster will represent.
+Cluster 1 - 2194 individuals 
+- BMI: - 0.296 - little below the average
+- BPSysAve: -0.520 — below average, relatively healthier blood pressure levels.
+- BPDiaAve: -0.398 — below average.
+- TotChol: -0.475 — lower; could mean a lower risk of cardiovascular issues.
+- Pulse: -0.219 — little below average; could mean good cardiovascular health
+
+Interpretation of C1: This cluster shows people that are healthier and have below
+average BMI, blood pressure, cholesterol levels and pulse. They could have lower
+risk for cardiovascular issues. 
+
+Cluster 2 - 2178 individuals
+- BMI: 0.288 — higher BMI; could mean greater body weight
+- BPSysAve: 0.430 — higher than average, could mean higher chance cardiovascular risk
+- BPDiaAve: 0.540 — above average, supporting the potential for cardiovascular risk
+- TotChol: 0.453 — higher-than-average; increased risk for heart diseases
+- Pulse: -0.033 — close to average
+
+Interpretation of C2: This cluster shows people that have higher than average BMI, 
+blood pressure, cholesterol levels, and pulse. This could indicate a higher chance 
+of cardiovascular issues. They would benefit from changing their lifestyle and 
+contacting a doctor. 
+
+```{r}
+d <- dist(clustering_data_health_risk, method="euclidean")  
+sil = silhouette(groups_2, d)
+plot(sil, col=1:5, main="", border=NA)
+summary(sil)
+```
+
+Values are again close to zero, but they are better than for 3 clusters. From 
+this we can assume that the clustering with only 2 centers is better than the 
+one with 3. 
+
+
+# PAM 
+```{r}
+fit_pam <- eclust(clustering_data_health_risk, "pam", stand=TRUE, k=4, graph=F)
+
+fviz_cluster(fit_pam, data = clustering_data_health_risk, geom = c("point"), pointsize=1)+
+  theme_minimal()+scale_fill_brewer(palette="Paired")
+```
+
+Number of groups by pam:
+
+```{r}
+fviz_nbclust(clustering_data_health_risk, pam, method = 'silhouette', k.max = 10)
+# This takes a minute to run!
+```
+
+Based on this graph, the optimal number of clusters is 2.  
+
+```{r}
+fit_pam_2 <- eclust(clustering_data_health_risk, "pam", stand=TRUE, k=2, graph=F)
+adjustedRandIndex(fit_2$cluster, fit_pam_2$clustering) 
+```
+The value(0.79) is close to 1, so we can say that the two classifications are in
+agreement. 
+
+```{r}
+sil_pam <- silhouette(fit_pam_2$clustering, dist(clustering_data_health_risk))
+summary(sil_pam)
+```
+Worse silhouette widths than k means. 
+
+# Kernel k-means
+  
+```{r}
+fit_ker <- kkmeans(as.matrix(clustering_data_health_risk), centers=2, kernel="rbfdot")
+#Also takes a minute to run!
+object_ker = list(data = clustering_data_health_risk, cluster = fit_ker@.Data)
+fviz_cluster(object_ker, geom = c("point"), ellipse=F,pointsize=1)+
+  theme_minimal()+scale_fill_brewer(palette="Paired")
+```
+```{r}
+adjustedRandIndex(fit_2$cluster, fit_ker@.Data) 
+```
+These are less of in agreement compared to the previous ones. 
+```{r}
+clusters_ker <- fit_ker@.Data
+kernel_matrix <- kernelMatrix(rbfdot(), as.matrix(clustering_data_health_risk))
+sil_ker <- silhouette(clusters_ker, as.dist(1 - kernel_matrix))
+summary(sil_ker)
+```
+Very low score, indicating bad classification. 
+
+# EM clustering
+
+```{r}
+res.Mclust <- Mclust(clustering_data_health_risk)
+summary(res.Mclust)
+```
+
+```{r}
+fviz_mclust(object = res.Mclust, what = "BIC", pallete = "jco") +
+  scale_x_discrete(limits = c(1:10))
+```
+
+The optimal number of cluster is 7 here.
+
+```{r}
+fviz_mclust(object = res.Mclust, what = "classification", geom = "point",
+            pallete = "jco")
+
+```
+
+```{r}
+fit_7 <- kmeans(clustering_data_health_risk, 7, nstart = 25, iter.max = 100)
+print(adjustedRandIndex(res.Mclust$classification, fit_7$cluster))
+```
+As we can see by the low values they are not in agreement. 
+```{r}
+sil_em <- silhouette(res.Mclust$classification, dist(clustering_data_health_risk))
+summary(sil_em)
+```
+
+The silhoutte widths of the EM clustering are also very low, indicating bad
+classification.
