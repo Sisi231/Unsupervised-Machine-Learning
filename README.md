@@ -24,13 +24,13 @@ Data Preprocessing:
 - Outlier detection and removal
 
 # Principal Component Analysis (PCA)
-Reduced dataset to 7 principal components
-Captured ~84.1% of total variance
+- Reduced dataset to 7 principal components
+- Captured ~84.1% of total variance
 
 Key interpretations:
-PC1: General cardiovascular health & age-related factors
-PC2: Body composition (weight, BMI, height)
-PC3+: Socioeconomic and lifestyle-related health patterns
+- PC1: General cardiovascular health & age-related factors
+- PC2: Body composition (weight, BMI, height)
+- PC3+: Socioeconomic and lifestyle-related health patterns
 
 # Factor Analysis
 
@@ -80,21 +80,33 @@ Cluster interpretation:
 
 # How to Run
 Open the R Markdown file (.Rmd) and run all chunks.
+
 The project uses the following libraries:
+
 library(dplyr)
+
 library(GGally)
+
 library(ggplot2)
+
 library(factoextra)
+
 library(cluster)
+
 library(mclust)
+
 library(kernlab)
+
 library(MASS)
 
 To load the dataset:
-Option A (recommended):
+- Option A (recommended):
+
 install.packages("NHANES")
+
 library(NHANES)
-Option B (if package installation fails):
+- Option B (if package installation fails):
+
 NHANES <- read.csv("NHANES_data.csv")
 
 Alternatively:
@@ -102,13 +114,20 @@ Open the .html file to view results directly (no setup required)
 
 # Project Structure
 ├──README.md
+
 ├──Data/
-|   └── NHANES_data_csv
+
+      └── NHANES_data_csv
+
 ├──Report/
-│   └── Report.pdf
+
+      └── Report.pdf
+
 ├──Notebooks/
-│   ├── unsupervised_learning_nhanes.Rmd
-│   └── unsupervised_learning_nhanes.html
+
+      ├── unsupervised_learning_nhanes.Rmd
+
+      └── unsupervised_learning_nhanes.html
 
 # Author
 Silvia Andreeva
