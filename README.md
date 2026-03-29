@@ -101,11 +101,14 @@ Alternatively:
 Open the .html file to view results directly (no setup required)
 
 # Project Structure
-├── data/
-├── scripts/
-├── report/
+├──README.md
+├──Data/
+|   └── NHANES_data_csv
+├──Report/
 │   └── Report.pdf
-├── README.md
+├──Notebooks/
+│   ├── unsupervised_learning_nhanes.Rmd
+│   └── unsupervised_learning_nhanes.html
 
 # Author
 Silvia Andreeva
