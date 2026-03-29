@@ -1,6 +1,6 @@
 ---
 title: "Statistical Learning Project"
-subtitle: "Homework 1: Unsupervised Learning"
+subtitle: "Unsupervised Learning"
 output:
   html_document: 
     theme: cerulean
