@@ -1,3 +1,7 @@
+![R](https://img.shields.io/badge/language-R-blue)
+![RMarkdown](https://img.shields.io/badge/tool-RMarkdown-lightgrey)
+![Status](https://img.shields.io/badge/status-Completed-brightgreen)
+
 # Unsupervised-Machine-Learning
 This project applies unsupervised learning techniques to the NHANES (National Health and Nutrition Examination Survey) dataset to uncover patterns in health, lifestyle, and demographic data.
 
