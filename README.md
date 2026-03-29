@@ -11,6 +11,19 @@ NHANES (2009–2012)
 ~10,000 observations, 76 variables
 Includes health, lifestyle, and demographic information
 
+# Tech Stack
+
+**Language:**  
+- R  
+
+**Tools & Libraries:**  
+- dplyr, ggplot2, GGally  
+- factoextra, cluster  
+- mclust, kernlab, MASS  
+
+**Environment:**  
+- R Markdown
+
 # Methods
 Data Preprocessing:
 - Removed variables with excessive missing values
