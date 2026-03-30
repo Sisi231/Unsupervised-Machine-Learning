@@ -148,7 +148,7 @@ Open the .html file to view results directly (no setup required)
 
       └── unsupervised_learning_nhanes.html
 
-# Author
+# Authors
 Silvia Andreeva
 
 Rocio Lopez Blazquez
