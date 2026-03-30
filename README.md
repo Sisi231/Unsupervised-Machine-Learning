@@ -12,7 +12,9 @@ The goal is to:
 
 # Dataset
 NHANES (2009–2012)
+
 ~10,000 observations, 76 variables
+
 Includes health, lifestyle, and demographic information
 
 # Tech Stack
